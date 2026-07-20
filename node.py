@@ -7,13 +7,13 @@ import hashlib
 vote_registry = []
 
 def hash_vote(candidate, ballot_id):
-    """Calcule un hash SHA-256 unique pour anonymiser et chiffrer le vote."""
     raw_string = f"{candidate}-{ballot_id}-secret-salt-123"
     return hashlib.sha256(raw_string.encode('utf-8')).hexdigest()
 
 def handle_client(client_node, address):
+    global vote_registry
     try:
-        data = client_node.recv(1024).decode('utf-8')
+        data = client_node.recv(4096).decode('utf-8')  # Augmenté à 4096 pour les gros registres
         if not data:
             return
         
@@ -22,15 +22,18 @@ def handle_client(client_node, address):
 
         if message_type == "VOTE":
             vote_data = payload.get("data")
-            vote_registry.append(vote_data)
-            print(f"\n[+] Nouveau VOTE CHIFFRÉ reçu ! Nombre total : {len(vote_registry)}")
-            print(f"[Registre Anonymisé] : {json.dumps(vote_data, indent=2)}")
+            # Évite d'ajouter des doublons basés sur le ballot_id
+            if vote_data not in vote_registry:
+                vote_registry.append(vote_data)
+                print(f"\n[+] Nouveau VOTE CHIFFRÉ reçu ! Total : {len(vote_registry)}")
             
-        elif message_type == "SYNC":
-            client_node.send(json.dumps(vote_registry).encode('utf-8'))
+        elif message_type == "SYNC_REQUEST":
+            # Un nœud nous demande nos votes, on lui répond en renvoyant tout le registre
+            response = {"type": "SYNC_RESPONSE", "data": vote_registry}
+            client_node.send(json.dumps(response).encode('utf-8'))
 
     except Exception as e:
-        print(f"\n[-] Erreur : {e}")
+        print(f"\n[-] Erreur lors du traitement du message : {e}")
     finally:
         client_node.close()
 
@@ -51,16 +54,14 @@ def listen_for_connections(host, port):
 
 def cast_vote(target_host, target_port, candidate):
     ballot_id = len(vote_registry) + 1
-    
-    # Hachage cryptographique du candidat pour l'anonymat
     encrypted_candidate_hash = hash_vote(candidate, ballot_id)
     
     vote_payload = {
         "type": "VOTE",
         "data": {
             "ballot_id": ballot_id,
-            "encrypted_ballot": encrypted_candidate_hash,  # Le choix est maintenant masqué cryptographiquement
-            "signature_verification": hashlib.md5(str(ballot_id).encode()).hexdigest() # Signature d'intégrité du nœud
+            "encrypted_ballot": encrypted_candidate_hash,
+            "signature_verification": hashlib.md5(str(ballot_id).encode()).hexdigest()
         }
     }
     try:
@@ -68,9 +69,36 @@ def cast_vote(target_host, target_port, candidate):
         client_socket.connect((target_host, target_port))
         client_socket.send(json.dumps(vote_payload).encode('utf-8'))
         client_socket.close()
-        print(f"[+] Vote chiffré envoyé avec succès à {target_host}:{target_port}")
+        print(f"[+] Vote chiffré envoyé à {target_host}:{target_port}")
     except Exception as e:
         print(f"[-] Échec de l'envoi : {e}")
+
+def request_synchronization(target_host, target_port):
+    """Demande le registre complet d'un autre nœud pour synchroniser le nôtre."""
+    global vote_registry
+    sync_payload = {"type": "SYNC_REQUEST"}
+    try:
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_socket.connect((target_host, target_port))
+        client_socket.send(json.dumps(sync_payload).encode('utf-8'))
+        
+        # Réception de la réponse
+        response_data = client_socket.recv(4096).decode('utf-8')
+        payload = json.loads(response_data)
+        
+        if payload.get("type") == "SYNC_RESPONSE":
+            remote_registry = payload.get("data", [])
+            # Fusion des registres sans doublons
+            count = 0
+            for vote in remote_registry:
+                if vote not in vote_registry:
+                    vote_registry.append(vote)
+                    count += 1
+            print(f"[+] Synchronisation réussie ! {count} nouveaux votes récupérés depuis le réseau.")
+        
+        client_socket.close()
+    except Exception as e:
+        print(f"[-] Échec de la synchronisation : {e}")
 
 if __name__ == "__main__":
     my_port = int(sys.argv[1]) if len(sys.argv) > 1 else 5000
@@ -80,16 +108,20 @@ if __name__ == "__main__":
     listener_thread.daemon = True
     listener_thread.start()
 
-    print("=== Commandes : 'vote', 'show', 'exit' ===")
+    print("=== Commandes : 'vote', 'sync', 'show', 'exit' ===")
     
     while True:
         command = input("> ").strip().lower()
         if command == "exit":
             break
         elif command == "show":
-            print(f"Registre local ({len(vote_registry)} votes) : {vote_registry}")
+            print(f"Registre local ({len(vote_registry)} votes) :\n{json.dumps(vote_registry, indent=2)}")
         elif command == "vote":
             target_ip = input("IP du nœud cible : ").strip()
             target_port = int(input("Port du nœud cible : "))
             candidate = input("Nom du candidat : ")
             cast_vote(target_ip, target_port, candidate)
+        elif command == "sync":
+            target_ip = input("IP du nœud à synchroniser : ").strip()
+            target_port = int(input("Port du nœud à synchroniser : "))
+            request_synchronization(target_ip, target_port)
