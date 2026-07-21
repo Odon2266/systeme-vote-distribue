@@ -1,39 +1,93 @@
+import os
 import socket
 import threading
 import sys
 import json
 import hashlib
+import psycopg2
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
 
-vote_registry = []
+# 🤫 Chargement des variables d'environnement depuis le fichier .env
+load_dotenv()
+
+DB_NAME = os.getenv("DB_NAME", "vote_db")
+DB_USER = os.getenv("DB_USER", "odon")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+SECRET_SALT = os.getenv("SECRET_SALT", "default_salt")
+
+def get_db_connection():
+    return psycopg2.connect(
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        host=DB_HOST,
+        port=DB_PORT
+    )
+
+def save_vote_to_local_db(ballot_id, encrypted_ballot, signature_verification):
+    """Insère un vote dans la base PostgreSQL locale s'il n'existe pas déjà."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO votes (ballot_id, encrypted_ballot, signature_verification)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (ballot_id) DO NOTHING;
+        """, (ballot_id, encrypted_ballot, signature_verification))
+        conn.commit()
+        cur.close()
+        conn.close()
+        print(f"[DB] Vote {ballot_id} enregistré dans PostgreSQL local.")
+    except Exception as e:
+        print(f"[-] Erreur DB locale : {e}")
+
+def get_all_local_votes():
+    """Récupère la liste des votes depuis la base locale."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT ballot_id, encrypted_ballot, signature_verification FROM votes ORDER BY ballot_id ASC;")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [{"ballot_id": r[0], "encrypted_ballot": r[1], "signature_verification": r[2]} for r in rows]
+    except Exception as e:
+        print(f"[-] Erreur lecture DB locale : {e}")
+        return []
 
 def hash_vote(candidate, ballot_id):
-    raw_string = f"{candidate}-{ballot_id}-secret-salt-123"
+    raw_string = f"{candidate}-{ballot_id}-{SECRET_SALT}"
     return hashlib.sha256(raw_string.encode('utf-8')).hexdigest()
 
+# --- GESTION DES SOCKETS TCP (RÉSEAU P2P) ---
 def handle_client(client_node, address):
-    global vote_registry
     try:
-        data = client_node.recv(4096).decode('utf-8')  # Augmenté à 4096 pour les gros registres
+        data = client_node.recv(4096).decode('utf-8')
         if not data:
             return
-        
         payload = json.loads(data)
-        message_type = payload.get("type")
-
-        if message_type == "VOTE":
+        
+        if payload.get("type") == "VOTE":
             vote_data = payload.get("data")
-            # Évite d'ajouter des doublons basés sur le ballot_id
-            if vote_data not in vote_registry:
-                vote_registry.append(vote_data)
-                print(f"\n[+] Nouveau VOTE CHIFFRÉ reçu ! Total : {len(vote_registry)}")
-            
-        elif message_type == "SYNC_REQUEST":
-            # Un nœud nous demande nos votes, on lui répond en renvoyant tout le registre
-            response = {"type": "SYNC_RESPONSE", "data": vote_registry}
+            save_vote_to_local_db(
+                vote_data["ballot_id"], 
+                vote_data["encrypted_ballot"], 
+                vote_data["signature_verification"]
+            )
+            print(f"\n[+] Vote chiffré reçu via Socket TCP !")
+
+        elif payload.get("type") == "SYNC_REQUEST":
+            local_votes = get_all_local_votes()
+            response = {"type": "SYNC_RESPONSE", "data": local_votes}
             client_node.send(json.dumps(response).encode('utf-8'))
 
     except Exception as e:
-        print(f"\n[-] Erreur lors du traitement du message : {e}")
+        print(f"[-] Erreur traitement Socket : {e}")
     finally:
         client_node.close()
 
@@ -42,86 +96,69 @@ def listen_for_connections(host, port):
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((host, port))
     server_socket.listen(5)
-    print(f"[*] Nœud en écoute sur {host}:{port}")
-
+    print(f"[*] Sockets TCP en écoute sur {host}:{port}")
     while True:
         try:
             client_node, address = server_socket.accept()
-            client_thread = threading.Thread(target=handle_client, args=(client_node, address))
-            client_thread.start()
-        except Exception as e:
+            threading.Thread(target=handle_client, args=(client_node, address)).start()
+        except:
             break
 
-def cast_vote(target_host, target_port, candidate):
-    ballot_id = len(vote_registry) + 1
-    encrypted_candidate_hash = hash_vote(candidate, ballot_id)
+def propagate_vote(target_host, target_port, vote_payload):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((target_host, target_port))
+        s.send(json.dumps(vote_payload).encode('utf-8'))
+        s.close()
+        print(f"[+] Vote propagé à {target_host}:{target_port}")
+    except Exception as e:
+        print(f"[-] Échec de la propagation vers {target_host}:{target_port} -> {e}")
+
+# --- API WEB FASTAPI ---
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/votes")
+def read_votes():
+    return {"votes": get_all_local_votes()}
+
+@app.post("/vote")
+def receive_vote_from_web(data: dict):
+    candidate = data.get("candidate")
+    target_ip = data.get("target_ip")
+    target_port = data.get("target_port", 6000)
+
+    current_votes = get_all_local_votes()
+    ballot_id = len(current_votes) + 1
+    encrypted_hash = hash_vote(candidate, ballot_id)
     
     vote_payload = {
         "type": "VOTE",
         "data": {
             "ballot_id": ballot_id,
-            "encrypted_ballot": encrypted_candidate_hash,
+            "encrypted_ballot": encrypted_hash,
             "signature_verification": hashlib.md5(str(ballot_id).encode()).hexdigest()
         }
     }
-    try:
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((target_host, target_port))
-        client_socket.send(json.dumps(vote_payload).encode('utf-8'))
-        client_socket.close()
-        print(f"[+] Vote chiffré envoyé à {target_host}:{target_port}")
-    except Exception as e:
-        print(f"[-] Échec de l'envoi : {e}")
 
-def request_synchronization(target_host, target_port):
-    """Demande le registre complet d'un autre nœud pour synchroniser le nôtre."""
-    global vote_registry
-    sync_payload = {"type": "SYNC_REQUEST"}
-    try:
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((target_host, target_port))
-        client_socket.send(json.dumps(sync_payload).encode('utf-8'))
-        
-        # Réception de la réponse
-        response_data = client_socket.recv(4096).decode('utf-8')
-        payload = json.loads(response_data)
-        
-        if payload.get("type") == "SYNC_RESPONSE":
-            remote_registry = payload.get("data", [])
-            # Fusion des registres sans doublons
-            count = 0
-            for vote in remote_registry:
-                if vote not in vote_registry:
-                    vote_registry.append(vote)
-                    count += 1
-            print(f"[+] Synchronisation réussie ! {count} nouveaux votes récupérés depuis le réseau.")
-        
-        client_socket.close()
-    except Exception as e:
-        print(f"[-] Échec de la synchronisation : {e}")
+    save_vote_to_local_db(ballot_id, encrypted_hash, vote_payload["data"]["signature_verification"])
+
+    if target_ip:
+        threading.Thread(target=propagate_vote, args=(target_ip, target_port, vote_payload)).start()
+
+    return {"status": "success", "message": "Vote enregistré et propagé !"}
 
 if __name__ == "__main__":
-    my_port = int(sys.argv[1]) if len(sys.argv) > 1 else 5000
-    my_host = "0.0.0.0"
+    socket_port = int(sys.argv[1]) if len(sys.argv) > 1 else 6000
+    api_port = int(sys.argv[2]) if len(sys.argv) > 2 else 8000
 
-    listener_thread = threading.Thread(target=listen_for_connections, args=(my_host, my_port))
-    listener_thread.daemon = True
-    listener_thread.start()
+    threading.Thread(target=listen_for_connections, args=("0.0.0.0", socket_port), daemon=True).start()
 
-    print("=== Commandes : 'vote', 'sync', 'show', 'exit' ===")
-    
-    while True:
-        command = input("> ").strip().lower()
-        if command == "exit":
-            break
-        elif command == "show":
-            print(f"Registre local ({len(vote_registry)} votes) :\n{json.dumps(vote_registry, indent=2)}")
-        elif command == "vote":
-            target_ip = input("IP du nœud cible : ").strip()
-            target_port = int(input("Port du nœud cible : "))
-            candidate = input("Nom du candidat : ")
-            cast_vote(target_ip, target_port, candidate)
-        elif command == "sync":
-            target_ip = input("IP du nœud à synchroniser : ").strip()
-            target_port = int(input("Port du nœud à synchroniser : "))
-            request_synchronization(target_ip, target_port)
+    print(f"[*] API Web prête sur http://0.0.0.0:{api_port}")
+    uvicorn.run(app, host="0.0.0.0", port=api_port)
