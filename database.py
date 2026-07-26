@@ -130,3 +130,55 @@ def get_resultats_db():
         if conn:
             conn.close()
         return []
+
+def get_all_candidats():
+    """Récupère la liste de tous les candidats depuis PostgreSQL."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT numero, nom, parti FROM candidats ORDER BY numero ASC;")
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [
+            {
+                "id": r[0],
+                "numero": r[0],
+                "nom": r[1],
+                "parti": r[2]
+            } for r in rows
+        ]
+    except Exception as e:
+        print(f"[-] Erreur lecture candidats : {e}")
+        return []
+
+def verify_login_only(cin: str, password: str):
+    """Vérifie uniquement les identifiants sans cocher la case a voté."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    
+    pwd_hash = hash_password(password)
+    
+    cur.execute("SELECT has_voted, password_hash FROM electeurs WHERE cin = %s;", (cin,))
+    row = cur.fetchone()
+
+    if not row:
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Électeur non trouvé.")
+    
+    has_voted, stored_pwd_hash = row
+
+    if stored_pwd_hash != pwd_hash:
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=401, detail="Mot de passe incorrect.")
+        
+    if has_voted:
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=400, detail="Vous avez déjà voté ! Action impossible.")
+
+    cur.close()
+    conn.close()
+    return True

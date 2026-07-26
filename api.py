@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from database import verify_and_mark_voter, save_vote_to_local_db, get_all_local_votes, get_resultats_db
+from database import verify_and_mark_voter, save_vote_to_local_db, get_all_local_votes, get_resultats_db,get_all_candidats,verify_login_only
 from crypto import hash_vote
 from p2p import propagate_vote
 
@@ -62,3 +62,19 @@ def receive_vote_from_web(vote_req: VoteSchema):
 def obtenir_resultats():
     resultats = get_resultats_db()
     return {"status": "success", "resultats": resultats}
+
+class LoginSchema(BaseModel):
+    cin: str
+    password: str
+@app.post("/login")
+def login(creds: LoginSchema):
+    # On utilise la nouvelle fonction qui ne fait QUE lire la BDD
+    verify_login_only(creds.cin, creds.password)
+    
+    role = "admin" if creds.cin == "admin" else "voter"
+    return {"status": "success", "role": role, "message": "Connexion réussie"}
+
+@app.get("/candidats")
+def get_candidats():
+    # On récupère les vrais candidats depuis ta base PostgreSQL
+    return get_all_candidats()
