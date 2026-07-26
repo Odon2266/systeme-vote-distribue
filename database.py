@@ -104,3 +104,29 @@ def verify_and_mark_voter(cin: str, password: str):
     conn.commit()
     cur.close()
     conn.close()
+
+def get_resultats_db():
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        # Requête pour compter les votes par candidat
+        cursor.execute("""
+            SELECT c.numero, c.nom, COUNT(v.id) as total_votes 
+            FROM candidats c 
+            LEFT JOIN votes v ON c.numero = v.candidat_numero 
+            GROUP BY c.numero, c.nom
+            ORDER BY total_votes DESC;
+        """)
+        resultats = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        # Formatage des résultats en liste de dictionnaires
+        return [{"numero": r[0], "nom": r[1], "votes": r[2]} for r in resultats]
+    except Exception as e:
+        print(f"[-] Erreur lors du calcul des résultats : {e}")
+        if conn:
+            conn.close()
+        return []
