@@ -10,7 +10,6 @@ export default function VoterDashboard() {
   const [success, setSuccess] = useState('');
   const navigate = useNavigate();
 
-  // Charger la liste des candidats depuis l'API FastAPI au chargement de la page
   useEffect(() => {
     const fetchCandidats = async () => {
       try {
@@ -29,26 +28,40 @@ export default function VoterDashboard() {
       return;
     }
 
+    const cin = sessionStorage.getItem("cin");
+    const password = sessionStorage.getItem("password");
+
+    if (!cin || !password) {
+      setError("Session expirée. Veuillez vous reconnecter.");
+      navigate('/login');
+      return;
+    }
+
     try {
-      // Envoi du vote à l'API FastAPI
-      await axios.post('http://localhost:8000/voter', {
-        candidat_id: selectedCandidate
+      await axios.post('http://localhost:8000/vote', {
+        cin: cin,
+        password: password,
+        candidat_numero: selectedCandidate
       });
+      
       setHasVoted(true);
       setSuccess("Votre vote a été enregistré avec succès !");
+      sessionStorage.clear();
+      
     } catch (err) {
-      setError("Erreur lors de l'enregistrement du vote. Vous avez peut-être déjà voté.");
+      const errorMsg = err.response?.data?.detail || "Erreur lors de l'enregistrement du vote. Vous avez peut-être déjà voté.";
+      setError(errorMsg);
     }
   };
 
   const handleLogout = () => {
+    sessionStorage.clear();
     navigate('/login');
   };
 
   return (
     <div className="bg-light min-vh-100 py-4">
       <div className="container">
-        {/* Barre de navigation supérieure */}
         <div className="d-flex justify-content-between align-items-center mb-4 bg-white p-3 rounded-4 shadow-sm">
           <h4 className="fw-bold text-primary m-0">🗳️ Espace Électeur</h4>
           <button onClick={handleLogout} className="btn btn-outline-danger btn-sm fw-semibold">
@@ -60,32 +73,37 @@ export default function VoterDashboard() {
         {success && <div className="alert alert-success">{success}</div>}
 
         {hasVoted ? (
-          <div className="card shadow border-0 text-center p-5 rounded-4 bg-white">
-            <div className="display-4 mb-3">✅</div>
-            <h3 className="fw-bold text-success">Vote validé</h3>
-            <p className="text-muted">Merci d'avoir participé au scrutin sécurisé.</p>
+          <div className="card shadow border-0 text-center p-5 rounded-4 bg-white animate-fade-in">
+            <div className="display-4 mb-3">🎉</div>
+            <h3 className="fw-bold text-success">Vote validé et sécurisé</h3>
+            <p className="text-muted">Votre suffrage a été transmis et enregistré. Merci de votre participation !</p>
+            <div className="mt-4">
+              <button onClick={handleLogout} className="btn btn-dark px-4 fw-semibold">
+                Quitter la session
+              </button>
+            </div>
           </div>
         ) : (
           <div>
             <h5 className="fw-semibold text-dark mb-3">Choisissez votre candidat :</h5>
             <div className="row g-4">
               {candidats.map((candidat) => (
-                <div className="col-md-4" key={candidat.id}>
+                <div className="col-md-4" key={candidat.numero}>
                   <div 
-                    className={`card h-100 shadow-sm border-2 cursor-pointer rounded-4 p-3 ${selectedCandidate === candidat.id ? 'border-primary bg-subtle' : 'border-light'}`}
-                    onClick={() => setSelectedCandidate(candidat.id)}
+                    className={`card h-100 shadow-sm border-2 rounded-4 p-3 ${selectedCandidate === candidat.numero ? 'border-primary bg-subtle' : 'border-light'}`}
+                    onClick={() => setSelectedCandidate(candidat.numero)}
                     style={{ cursor: 'pointer' }}
                   >
                     <div className="card-body text-center">
                       <h5 className="fw-bold text-dark">{candidat.nom}</h5>
-                      <p className="text-muted small">{candidat.parti || "Indépendant"}</p>
+                      <p className="text-muted small">Candidat officiel</p>
                       <div className="form-check d-flex justify-content-center mt-3">
                         <input 
                           className="form-check-input" 
                           type="radio" 
                           name="candidatRadio" 
-                          checked={selectedCandidate === candidat.id}
-                          onChange={() => setSelectedCandidate(candidat.id)}
+                          checked={selectedCandidate === candidat.numero}
+                          onChange={() => setSelectedCandidate(candidat.numero)}
                         />
                       </div>
                     </div>

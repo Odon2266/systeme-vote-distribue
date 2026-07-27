@@ -20,6 +20,10 @@ export default function Login() {
         password
       });
 
+      // Sauvegarde des identifiants dans la session
+      sessionStorage.setItem("cin", cin);
+      sessionStorage.setItem("password", password);
+
       const { role } = response.data;
       if (role === 'admin') {
         navigate('/admin');
@@ -27,7 +31,9 @@ export default function Login() {
         navigate('/voter');
       }
     } catch (err) {
-      setError('Identifiants incorrects ou serveur injoignable.');
+      // 💡 Affiche le message exact renvoyé par FastAPI s'il existe
+      const backendMessage = err.response?.data?.detail;
+      setError(backendMessage || 'Identifiants incorrects ou serveur injoignable.');
     } finally {
       setLoading(false);
     }
@@ -49,14 +55,14 @@ export default function Login() {
 
         <form onSubmit={handleLogin}>
           <div className="mb-3">
-            <label className="form-label fw-semibold small text-secondary">Numéro CIN</label>
+            <label className="form-label fw-semibold small text-secondary">CIN ou Identifiant Admin</label>
             <input
               type="text"
               className="form-control form-control-lg fs-6"
               value={cin}
               onChange={(e) => setCin(e.target.value)}
               required
-              placeholder="Ex: 42301101751"
+              placeholder="Ex: 423011017551 ou admin"
             />
           </div>
 
