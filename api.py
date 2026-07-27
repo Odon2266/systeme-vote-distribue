@@ -12,7 +12,17 @@ from database import (
     get_resultats_db,
     get_all_candidats,
     verify_user_login,
-    add_candidat_db
+    add_candidat_db,
+    update_candidat_db,
+    delete_candidat_db,
+    verify_user_login,
+    get_all_electeurs,
+    add_electeur_db,
+    reset_voter_status_db,
+    delete_electeur_db,
+    get_all_admins,
+    add_admin_db,
+    delete_admin_db
 )
 from crypto import hash_vote
 from p2p import propagate_vote
@@ -108,3 +118,66 @@ def obtenir_resultats():
     # Récupère le décompte des voix par candidat
     resultats = get_resultats_db()
     return {"status": "success", "resultats": resultats}
+
+# --- NOUVEAUX SCHÉMAS PYDANTIC ---
+
+class ElecteurSchema(BaseModel):
+    cin: str
+    password: str
+
+class AdminCreateSchema(BaseModel):
+    identifiant: str
+    nom: str
+    password: str
+
+
+# --- ROUTES CRUD CANDIDATS ---
+
+@app.put("/candidats/{numero}")
+def update_candidat(numero: int, candidat: CandidatSchema):
+    update_candidat_db(numero, candidat.numero, candidat.nom)
+    return {"status": "success", "message": "Candidat mis à jour !"}
+
+@app.delete("/candidats/{numero}")
+def delete_candidat(numero: int):
+    delete_candidat_db(numero)
+    return {"status": "success", "message": "Candidat supprimé !"}
+
+
+# --- ROUTES CRUD ÉLECTEURS ---
+
+@app.get("/electeurs")
+def read_electeurs():
+    return get_all_electeurs()
+
+@app.post("/electeurs")
+def create_electeur(electeur: ElecteurSchema):
+    add_electeur_db(electeur.cin, electeur.password)
+    return {"status": "success", "message": "Électeur ajouté avec succès !"}
+
+@app.put("/electeurs/{cin}/reset")
+def reset_electeur_vote(cin: str):
+    reset_voter_status_db(cin)
+    return {"status": "success", "message": "Statut de vote réinitialisé !"}
+
+@app.delete("/electeurs/{cin}")
+def delete_electeur(cin: str):
+    delete_electeur_db(cin)
+    return {"status": "success", "message": "Électeur supprimé !"}
+
+
+# --- ROUTES CRUD ADMINS ---
+
+@app.get("/admins")
+def read_admins():
+    return get_all_admins()
+
+@app.post("/admins")
+def create_admin(admin_data: AdminCreateSchema):
+    add_admin_db(admin_data.identifiant, admin_data.nom, admin_data.password)
+    return {"status": "success", "message": "Administrateur ajouté !"}
+
+@app.delete("/admins/{identifiant}")
+def delete_admin(identifiant: str):
+    delete_admin_db(identifiant)
+    return {"status": "success", "message": "Administrateur supprimé !"}

@@ -210,3 +210,139 @@ def get_resultats_db():
     finally:
         cur.close()
         conn.close()
+
+# ==========================================
+# 🗳️ CRUD CANDIDATS
+# ==========================================
+
+def update_candidat_db(numero_original: int, nouveau_numero: int, nouveau_nom: str):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE candidats SET numero = %s, nom = %s WHERE numero = %s;",
+            (nouveau_numero, nouveau_nom, numero_original)
+        )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=f"Erreur mise à jour candidat : {e}")
+    finally:
+        cur.close()
+        conn.close()
+
+def delete_candidat_db(numero: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM candidats WHERE numero = %s;", (numero,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=f"Erreur suppression candidat : {e}")
+    finally:
+        cur.close()
+        conn.close()
+
+
+# ==========================================
+# 👥 CRUD ÉLECTEURS
+# ==========================================
+
+def get_all_electeurs():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT cin, has_voted FROM electeurs ORDER BY cin ASC;")
+        rows = cur.fetchall()
+        return [{"cin": r[0], "has_voted": r[1]} for r in rows]
+    except Exception as e:
+        print(f"[-] Erreur lecture électeurs : {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def add_electeur_db(cin: str, password: str):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    pwd_hash = hash_password(password)
+    try:
+        cur.execute(
+            "INSERT INTO electeurs (cin, password_hash, has_voted) VALUES (%s, %s, FALSE);",
+            (cin, pwd_hash)
+        )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=f"CIN déjà existant ou erreur : {e}")
+    finally:
+        cur.close()
+        conn.close()
+
+def reset_voter_status_db(cin: str):
+    """Permet de réinitialiser le droit de vote d'un électeur (has_voted = FALSE)."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE electeurs SET has_voted = FALSE WHERE cin = %s;", (cin,))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+def delete_electeur_db(cin: str):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM electeurs WHERE cin = %s;", (cin,))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+# ==========================================
+# 🛡️ CRUD ADMINISTRATEURS
+# ==========================================
+
+def get_all_admins():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, identifiant, nom FROM administrateurs ORDER BY id ASC;")
+        rows = cur.fetchall()
+        return [{"id": r[0], "identifiant": r[1], "nom": r[2]} for r in rows]
+    except Exception as e:
+        print(f"[-] Erreur lecture admins : {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+def add_admin_db(identifiant: str, nom: str, password: str):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    pwd_hash = hash_password(password)
+    try:
+        cur.execute(
+            "INSERT INTO administrateurs (identifiant, nom, password_hash) VALUES (%s, %s, %s);",
+            (identifiant, nom, pwd_hash)
+        )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=f"Identifiant admin déjà pris ou erreur : {e}")
+    finally:
+        cur.close()
+        conn.close()
+
+def delete_admin_db(identifiant: str):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM administrateurs WHERE identifiant = %s;", (identifiant,))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()

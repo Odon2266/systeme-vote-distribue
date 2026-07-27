@@ -2,7 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import VoterDashboard from './pages/VoterDashboard';
-import AdminDashboard from './pages/AdminDashboard'; // <-- Import du vrai composant
+import AdminDashboard from './pages/AdminDashboard';
 
 export default function App() {
   return (
