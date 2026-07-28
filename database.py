@@ -7,28 +7,21 @@ from crypto import hash_password
 
 load_dotenv()
 
-DB_NAME = os.getenv("DB_NAME", "vote_db")
-DB_USER = os.getenv("DB_USER", "odon")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
+# Récupération de l'URL unique Neon.tech
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # ==========================================
 # ⚙️ GESTION DU POOL DE CONNEXIONS (OPTIMISATION)
 # ==========================================
 
 try:
-    # Création d'un pool de 1 à 20 connexions adaptées au multithreading (FastAPI + P2P)
+    # Création d'un pool basé sur l'URL de connexion (Neon.tech / Cloud)
     db_pool = psycopg2.pool.ThreadedConnectionPool(
         minconn=1,
         maxconn=20,
-        dbname=DB_NAME,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        host=DB_HOST,
-        port=DB_PORT
+        dsn=DATABASE_URL
     )
-    print("[*] Pool de connexions PostgreSQL (Threaded) initialisé.")
+    print("[*] Pool de connexions PostgreSQL (Neon.tech) initialisé.")
 except Exception as e:
     print(f"[-] Erreur critique lors de la création du pool PostgreSQL : {e}")
     db_pool = None
