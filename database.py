@@ -1,5 +1,6 @@
 import os
 import psycopg2
+from psycopg2 import pool
 from fastapi import HTTPException
 from dotenv import load_dotenv
 from crypto import hash_password
@@ -12,20 +13,40 @@ DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "5432")
 
+# ==========================================
+# ⚙️ GESTION DU POOL DE CONNEXIONS (OPTIMISATION)
+# ==========================================
+
+try:
+    # Création d'un pool de 1 à 20 connexions adaptées au multithreading (FastAPI + P2P)
+    db_pool = psycopg2.pool.ThreadedConnectionPool(
+        minconn=1,
+        maxconn=20,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        host=DB_HOST,
+        port=DB_PORT
+    )
+    print("[*] Pool de connexions PostgreSQL (Threaded) initialisé.")
+except Exception as e:
+    print(f"[-] Erreur critique lors de la création du pool PostgreSQL : {e}")
+    db_pool = None
 
 def get_db_connection():
-    """Établit la connexion à la base de données PostgreSQL."""
+    """Récupère une connexion disponible depuis le pool."""
+    if not db_pool:
+        raise HTTPException(status_code=500, detail="Base de données inaccessible.")
     try:
-        return psycopg2.connect(
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            host=DB_HOST,
-            port=DB_PORT
-        )
+        return db_pool.getconn()
     except Exception as e:
-        print(f"[-] Erreur de connexion à PostgreSQL : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de se connecter à la base de données.")
+        print(f"[-] Pool saturé ou erreur : {e}")
+        raise HTTPException(status_code=500, detail="Trop de connexions simultanées.")
+
+def release_db_connection(conn):
+    """Remet la connexion dans le pool au lieu de la détruire."""
+    if db_pool and conn:
+        db_pool.putconn(conn)
 
 
 # ==========================================
@@ -39,7 +60,6 @@ def verify_user_login(identifiant: str, password: str):
     pwd_hash = hash_password(password)
 
     try:
-        # 1. Vérifier si l'utilisateur est un Administrateur
         cur.execute("SELECT password_hash FROM administrateurs WHERE identifiant = %s;", (identifiant,))
         admin_row = cur.fetchone()
 
@@ -48,7 +68,6 @@ def verify_user_login(identifiant: str, password: str):
                 raise HTTPException(status_code=401, detail="Mot de passe administrateur incorrect.")
             return "admin"
 
-        # 2. Vérifier si l'utilisateur est un Électeur
         cur.execute("SELECT has_voted, password_hash FROM electeurs WHERE cin = %s;", (identifiant,))
         voter_row = cur.fetchone()
 
@@ -67,7 +86,7 @@ def verify_user_login(identifiant: str, password: str):
 
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
 
 def verify_and_mark_voter(cin: str, password: str):
@@ -91,13 +110,15 @@ def verify_and_mark_voter(cin: str, password: str):
         if has_voted:
             raise HTTPException(status_code=400, detail="Vous avez déjà voté !")
 
-        # Marquer l'électeur comme ayant voté
         cur.execute("UPDATE electeurs SET has_voted = TRUE WHERE cin = %s;", (cin,))
         conn.commit()
 
+    except Exception as e:
+        conn.rollback()
+        raise e
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
 
 # ==========================================
@@ -117,7 +138,7 @@ def get_all_candidats():
         return []
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
 
 def add_candidat_db(numero: int, nom: str):
@@ -133,7 +154,38 @@ def add_candidat_db(numero: int, nom: str):
         raise HTTPException(status_code=400, detail=f"Numéro déjà attribué ou erreur : {e}")
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
+
+
+def update_candidat_db(numero_original: int, nouveau_numero: int, nouveau_nom: str):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE candidats SET numero = %s, nom = %s WHERE numero = %s;",
+            (nouveau_numero, nouveau_nom, numero_original)
+        )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=f"Erreur mise à jour candidat : {e}")
+    finally:
+        cur.close()
+        release_db_connection(conn)
+
+
+def delete_candidat_db(numero: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM candidats WHERE numero = %s;", (numero,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=f"Erreur suppression candidat : {e}")
+    finally:
+        cur.close()
+        release_db_connection(conn)
 
 
 # ==========================================
@@ -157,7 +209,7 @@ def save_vote_to_local_db(candidat_numero: int, vote_hash: str, node_origin: str
         print(f"[-] Erreur sauvegarde vote locale : {e}")
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
 
 def get_all_local_votes():
@@ -187,7 +239,7 @@ def get_all_local_votes():
         return []
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
 
 def get_resultats_db():
@@ -209,40 +261,7 @@ def get_resultats_db():
         return []
     finally:
         cur.close()
-        conn.close()
-
-# ==========================================
-# 🗳️ CRUD CANDIDATS
-# ==========================================
-
-def update_candidat_db(numero_original: int, nouveau_numero: int, nouveau_nom: str):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            "UPDATE candidats SET numero = %s, nom = %s WHERE numero = %s;",
-            (nouveau_numero, nouveau_nom, numero_original)
-        )
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=400, detail=f"Erreur mise à jour candidat : {e}")
-    finally:
-        cur.close()
-        conn.close()
-
-def delete_candidat_db(numero: int):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute("DELETE FROM candidats WHERE numero = %s;", (numero,))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=400, detail=f"Erreur suppression candidat : {e}")
-    finally:
-        cur.close()
-        conn.close()
+        release_db_connection(conn)
 
 
 # ==========================================
@@ -261,7 +280,7 @@ def get_all_electeurs():
         return []
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
 def add_electeur_db(cin: str, password: str):
     conn = get_db_connection()
@@ -278,10 +297,9 @@ def add_electeur_db(cin: str, password: str):
         raise HTTPException(status_code=400, detail=f"CIN déjà existant ou erreur : {e}")
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
 def reset_voter_status_db(cin: str):
-    """Permet de réinitialiser le droit de vote d'un électeur (has_voted = FALSE)."""
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -289,7 +307,7 @@ def reset_voter_status_db(cin: str):
         conn.commit()
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
 def delete_electeur_db(cin: str):
     conn = get_db_connection()
@@ -299,7 +317,7 @@ def delete_electeur_db(cin: str):
         conn.commit()
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
 
 # ==========================================
@@ -318,7 +336,7 @@ def get_all_admins():
         return []
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
 def add_admin_db(identifiant: str, nom: str, password: str):
     conn = get_db_connection()
@@ -335,7 +353,7 @@ def add_admin_db(identifiant: str, nom: str, password: str):
         raise HTTPException(status_code=400, detail=f"Identifiant admin déjà pris ou erreur : {e}")
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
 
 def delete_admin_db(identifiant: str):
     conn = get_db_connection()
@@ -345,4 +363,4 @@ def delete_admin_db(identifiant: str):
         conn.commit()
     finally:
         cur.close()
-        conn.close()
+        release_db_connection(conn)
